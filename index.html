@@ -1716,56 +1716,66 @@ function attachStaffRowLogic(wrapper) {
         await loadRecoveryOptions();
       }
     }
+async function recoverEntriesToThisDevice() {
+  const url = getGoogleSyncUrl();
+  const password = String(document.getElementById("recoverPassword").value || "").trim();
+  const siteName = String(document.getElementById("recoverSiteName").value || "").trim();
+  const client = String(document.getElementById("recoverClientName").value || "").trim();
 
-    async function recoverEntriesToThisDevice() {
-      const url = getGoogleSyncUrl();
-      const password = String(document.getElementById("recoverPassword")?.value || "").trim();
-      const siteName = String(document.getElementById("recoverSiteName")?.value || "").trim();
-      const client = String(document.getElementById("recoverClientName")?.value || "").trim();
-      if (!url) {
-        setRecoverStatus("Enter a valid Apps Script URL first.", "warn");
-        return false;
-      }
-      if (!password) {
-        setRecoverStatus("Enter the one-time recovery password from Google Sheets.", "warn");
-        return false;
-      }
-      if (!siteName && !client) {
-        setRecoverStatus("Choose at least a site, a client, or both before recovering entries.", "warn");
-        return false;
-      }
-      setRecoverStatus("Recovering matching entries to this device...", "");
-      try {
-        const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`, {
-          method: "POST",
-          cache: "no-store",
-          headers: { "Content-Type": "text/plain;charset=utf-8", "Cache-Control": "no-cache, no-store, max-age=0", "Pragma": "no-cache" },
-          body: JSON.stringify({
-            action: "recoverentries",
-            password,
-            siteName,
-            client,
-            deviceId: getDeviceId(),
-            knownEntryIds: getEntries().map(entry => normalizeEntryId(entry.id || entry.entryId)).filter(Boolean),
-            knownIds: getEntries().map(entry => normalizeEntryId(entry.id || entry.entryId)).filter(Boolean)
-          })
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok || result.ok === false || !Array.isArray(result.entries)) throw new Error(result.error || result.message || ("HTTP " + response.status));
-        const mergeResult = mergeDownloadedEntries(result.entries);
-        const passwordInput = document.getElementById("recoverPassword");
-        if (passwordInput) passwordInput.value = "";
-        renderAll();
-        setRecoverStatus(`Recovery complete. Added ${mergeResult.addedCount}, updated ${mergeResult.updatedCount}, matched ${result.matchedCount || result.entries.length} entr${(result.matchedCount || result.entries.length) === 1 ? "y" : "ies"}. The recovery password was reset in Google Sheets.`, "good");
-        setSyncStatus(`Recovery complete for this device. Added ${mergeResult.addedCount}, updated ${mergeResult.updatedCount}.`, "good");
-        return true;
-      } catch (err) {
-        console.error(err);
-        setRecoverStatus(String(err && err.message ? err.message : err) || "Could not recover entries.", "warn");
-        return false;
-      }
+  if (!url) {
+    setRecoveryStatus("Apps Script URL is missing.", "warn");
+    return false;
+  }
+  if (!password) {
+    setRecoveryStatus("Enter the one-time recovery password.", "warn");
+    return false;
+  }
+  if (!siteName && !client) {
+    setRecoveryStatus("Choose at least a site, a client, or both.", "warn");
+    return false;
+  }
+
+  setRecoveryStatus("Recovering matching entries...", "");
+
+  try {
+    const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`, {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        "Content-Type": "text/plain;charset=utf-8"
+      },
+      body: JSON.stringify({
+        action: "recoverEntries",
+        password,
+        siteName,
+        client,
+        deviceId: getDeviceId(),
+        knownEntryIds: getEntries().map(entry => normalizeEntryId(entry.id || entry.entryId)).filter(Boolean)
+      })
+    });
+
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || result.message || ("HTTP " + response.status));
     }
 
+    const remoteEntries = Array.isArray(result.entries) ? result.entries : [];
+    const mergeResult = mergeDownloadedEntries(remoteEntries);
+
+    recoveryOptionsLoaded = false;
+    renderAll();
+
+    setRecoveryStatus(
+      `Recovered ${mergeResult.addedCount || remoteEntries.length} matching entr${(mergeResult.addedCount || remoteEntries.length) === 1 ? "y" : "ies"}.`,
+      "good"
+    );
+    return true;
+  } catch (err) {
+    setRecoveryStatus(err && err.message ? err.message : "Failed to fetch", "warn");
+    return false;
+  }
+}
 
     function pulsePressedButton(buttonEl) {
       if (!buttonEl) return;
