@@ -1665,48 +1665,45 @@ function attachStaffRowLogic(wrapper) {
       el.innerHTML = [`<option value="">${escapeHtml(placeholder)}</option>`].concat(list.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)).join("");
       if (current && list.includes(current)) el.value = current;
     }
+async function loadRecoveryOptions() {
+  const url = getGoogleSyncUrl();
 
-    async function loadRecoveryOptions(force = false) {
-      const url = getGoogleSyncUrl();
-      if (!url) {
-        setRecoverStatus("No Apps Script URL set.", "warn");
-        return false;
-      }
-      if (recoveryOptionsLoaded && !force) return true;
-      setRecoverStatus("Loading recovery site and client lists...", "");
-      try {
-        const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`, {
-          method: "POST",
-          cache: "no-store",
-          headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({ action: "getRecoveryOptions" })
-        });
-        const rawText = await response.text();
-        let result = {};
-        try {
-          result = rawText ? JSON.parse(rawText) : {};
-        } catch (parseError) {
-          const snippet = String(rawText || "").replace(/\s+/g, " ").trim().slice(0, 220);
-          throw new Error(`Recovery list response was not valid JSON. HTTP ${response.status}. ${snippet || "Empty response."}`);
-        }
-        if (!response.ok || result.ok === false) {
-          const debugSteps = Array.isArray(result?.debug?.steps) ? ` Steps: ${result.debug.steps.join(" > ")}` : "";
-          throw new Error((result.error || result.message || ("HTTP " + response.status)) + debugSteps);
-        }
-        populateRecoverySelect("recoverSiteName", result.sites || [], "All Sites");
-        populateRecoverySelect("recoverClientName", result.clients || [], "All Clients");
-        recoveryOptionsLoaded = true;
-        const counts = `Sites: ${(result.sites || []).length}, Clients: ${(result.clients || []).length}`;
-        setRecoverStatus(`Recovery lists loaded. ${counts}`, "good");
-        return true;
-      } catch (err) {
-        console.error("loadRecoveryOptions failed:", err);
-        const detail = err && err.message ? err.message : String(err || "Unknown recovery list error.");
-        setRecoverStatus(`Could not load recovery site and client lists. ${detail}`, "warn");
-        return false;
-      }
+  if (!url) {
+    setRecoveryStatus("Apps Script URL missing.", "warn");
+    return false;
+  }
+
+  setRecoveryStatus("Loading recovery lists...", "");
+
+  try {
+    const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain;charset=utf-8"
+      },
+      body: JSON.stringify({
+        action: "getRecoveryOptions"
+      })
+    });
+
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || result.message || ("HTTP " + response.status));
     }
 
+    populateRecoverySelect("recoverSiteName", result.sites || [], "All Sites");
+    populateRecoverySelect("recoverClientName", result.clients || [], "All Clients");
+
+    recoveryOptionsLoaded = true;
+    setRecoveryStatus(`Recovery lists loaded. Sites: ${result.sites.length}, Clients: ${result.clients.length}`, "good");
+    return true;
+
+  } catch (err) {
+    setRecoveryStatus("Could not load recovery lists. " + (err.message || err), "warn");
+    return false;
+  }
+}
     async function toggleRecoverPanel() {
       const panel = document.getElementById("recoverPanel");
       if (!panel) return;
@@ -1723,24 +1720,19 @@ async function recoverEntriesToThisDevice() {
   const client = String(document.getElementById("recoverClientName").value || "").trim();
 
   if (!url) {
-    setRecoveryStatus("Apps Script URL is missing.", "warn");
+    setRecoveryStatus("Apps Script URL missing.", "warn");
     return false;
   }
   if (!password) {
-    setRecoveryStatus("Enter the one-time recovery password.", "warn");
-    return false;
-  }
-  if (!siteName && !client) {
-    setRecoveryStatus("Choose at least a site, a client, or both.", "warn");
+    setRecoveryStatus("Enter recovery password.", "warn");
     return false;
   }
 
-  setRecoveryStatus("Recovering matching entries...", "");
+  setRecoveryStatus("Recovering entries...", "");
 
   try {
     const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`, {
       method: "POST",
-      cache: "no-store",
       headers: {
         "Content-Type": "text/plain;charset=utf-8"
       },
@@ -1750,7 +1742,7 @@ async function recoverEntriesToThisDevice() {
         siteName,
         client,
         deviceId: getDeviceId(),
-        knownEntryIds: getEntries().map(entry => normalizeEntryId(entry.id || entry.entryId)).filter(Boolean)
+        knownEntryIds: getEntries().map(e => normalizeEntryId(e.id || e.entryId)).filter(Boolean)
       })
     });
 
@@ -1763,16 +1755,17 @@ async function recoverEntriesToThisDevice() {
     const remoteEntries = Array.isArray(result.entries) ? result.entries : [];
     const mergeResult = mergeDownloadedEntries(remoteEntries);
 
-    recoveryOptionsLoaded = false;
     renderAll();
 
     setRecoveryStatus(
-      `Recovered ${mergeResult.addedCount || remoteEntries.length} matching entr${(mergeResult.addedCount || remoteEntries.length) === 1 ? "y" : "ies"}.`,
+      `Recovered ${mergeResult.addedCount || remoteEntries.length} entries.`,
       "good"
     );
+
     return true;
+
   } catch (err) {
-    setRecoveryStatus(err && err.message ? err.message : "Failed to fetch", "warn");
+    setRecoveryStatus("Failed to fetch. " + (err.message || err), "warn");
     return false;
   }
 }
