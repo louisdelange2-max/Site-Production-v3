@@ -1,4 +1,4 @@
-const CACHE_NAME = 'site-production-v3.0.16-idb';
+const CACHE_NAME = 'site-production-v3.0.17-idb';
 const CORE_ASSETS = [
   './',
   './index.html',
