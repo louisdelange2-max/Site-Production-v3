@@ -1,4 +1,4 @@
-const CACHE_NAME = 'site-production-v3.3.15-employee-site-allocation';
+const CACHE_NAME = 'site-production-v3.3.16-auth-fix';
 const CORE_ASSETS = [
   './',
   './index.html',

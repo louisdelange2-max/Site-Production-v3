@@ -572,7 +572,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 
   <script>
-    const APP_BUILD = "site-production-v3.3.15-employee-site-allocation";
+    const APP_BUILD = "site-production-v3.3.16-auth-fix";
     const STORAGE_KEY = "production_app_entries_v9";
     const MACHINE_MASTER_KEY = "production_app_machine_master_v9";
     const SITE_MASTER_KEY = "production_app_site_master_v9";
@@ -2820,6 +2820,23 @@
       }
     }
 
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBSjXibnWsPfKicOrRisN_-n4TzKBhH3VU",
+      authDomain: "site-production-3b20b.firebaseapp.com",
+      projectId: "site-production-3b20b",
+      storageBucket: "site-production-3b20b.firebasestorage.app",
+      messagingSenderId: "448364112489",
+      appId: "1:448364112489:web:71a129e7145e0ac50c10f8",
+      measurementId: "G-PDP7QLJHJ2"
+    };
+
+    let firebaseAuth = null;
+    let firebaseDb = null;
+    let firebaseConfirmationResult = null;
+    let firebaseRecaptchaVerifier = null;
+    let firebaseCurrentAllowedUser = null;
+    let firebaseAuthInitialized = false;
 
     function normalizeSouthAfricanPhone(value) {
       let raw = String(value || "").trim().replace(/[()\s-]/g, "");
