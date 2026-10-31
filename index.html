@@ -572,7 +572,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 
   <script>
-    const APP_BUILD = "site-production-v3.3.16-auth-fix";
+    const APP_BUILD = "site-production-v3.3.17-employee-layout";
     const STORAGE_KEY = "production_app_entries_v9";
     const MACHINE_MASTER_KEY = "production_app_machine_master_v9";
     const SITE_MASTER_KEY = "production_app_site_master_v9";
@@ -2560,13 +2560,13 @@
       }
       el.innerHTML = visibleEmployees.map(item => `
         <div class="site-client-row">
-          <div class="row">
-            <div>
-              <strong>${escapeHtml(item.employeeNumber || "")} · ${escapeHtml(item.name || "")}</strong>
-              <div class="muted">${escapeHtml(item.designation || "")} · ${item.active === false ? "Inactive" : "Active"} · Sites: ${escapeHtml((item.assignedSites || []).join(", ") || "None")}</div>
-            </div>
-            <button type="button" class="secondary small-btn" onclick="editEmployeeFromAdmin('${escapeHtml(item.id)}')">Edit</button>
-            <button type="button" class="danger small-btn" onclick="deleteEmployeeFromAdmin('${escapeHtml(item.id)}')">Delete</button>
+          <div style="min-width:0;overflow-wrap:anywhere;">
+            <strong>${escapeHtml(item.employeeNumber || "")} · ${escapeHtml(item.name || "")}</strong>
+            <div class="muted">${escapeHtml(item.designation || "")} · ${item.active === false ? "Inactive" : "Active"} · Sites: ${escapeHtml((item.assignedSites || []).join(", ") || "None")}</div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px;">
+            <button type="button" class="secondary small-btn" style="width:100%;margin:0;" onclick="editEmployeeFromAdmin('${escapeHtml(item.id)}')">Edit</button>
+            <button type="button" class="danger small-btn" style="width:100%;margin:0;" onclick="deleteEmployeeFromAdmin('${escapeHtml(item.id)}')">Delete</button>
           </div>
         </div>
       `).join("");

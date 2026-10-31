@@ -1,4 +1,4 @@
-const CACHE_NAME = 'site-production-v3.3.16-auth-fix';
+const CACHE_NAME = 'site-production-v3.3.17-employee-layout';
 const CORE_ASSETS = [
   './',
   './index.html',
