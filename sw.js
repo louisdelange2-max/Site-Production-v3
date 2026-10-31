@@ -1,4 +1,4 @@
-const CACHE_NAME = 'site-production-v3.3.14-stockpile-lunch-responsibility';
+const CACHE_NAME = 'site-production-v3.3.15-employee-site-allocation';
 const CORE_ASSETS = [
   './',
   './index.html',

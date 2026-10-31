@@ -176,7 +176,7 @@
     .site-folder-body { padding:0 12px 12px; }
     .site-folder .entry { margin-top:12px; }
 
-  
+
     body.auth-locked .app, body.auth-locked .nav { display:none !important; }
     .auth-gate { position:fixed; inset:0; z-index:12000; display:flex; align-items:center; justify-content:center; padding:18px; background:#f3f4f6; }
     .auth-gate.hidden { display:none; }
@@ -215,7 +215,7 @@
       <span id="authUserText">Signed in</span>
       <button type="button" class="secondary" onclick="firebaseSignOutUser()">Sign Out</button>
     </div>
-    
+
   </div>
 
   <div id="authGate" class="auth-gate">
@@ -501,6 +501,10 @@
             <div><label for="adminEmployeeName">Name</label><input id="adminEmployeeName" placeholder="Employee name" /></div>
             <div><label for="adminEmployeeDesignation">Designation</label><input id="adminEmployeeDesignation" placeholder="e.g. Operator" /></div>
             <div><label for="adminEmployeeActive">Access</label><select id="adminEmployeeActive"><option value="true">Active</option><option value="false">Inactive</option></select></div>
+            <div>
+              <label>Allocated Sites</label>
+              <div id="adminEmployeeSitesPicker" class="admin-site-choices"></div>
+            </div>
             <button type="button" class="primary small-btn" onclick="saveEmployeeFromAdmin()">Save Employee</button>
           </div>
           <div id="adminEmployeeStatus" class="status"></div>
@@ -524,7 +528,7 @@
         <div class="section-title">
           <h3>Master Data Migration</h3>
           <p class="muted">Run this once to download the complete Staff Master and Machine Master from Google Sheets into Firestore. Existing Firestore records are not overwritten.</p>
-          <button type="button" class="secondary small-btn" onclick="importAllEmployeePlantMastersToFirestore()">Import ALL Employees & Plants from Google Sheets</button>
+
           <div class="top-actions">
             <button type="button" class="secondary small-btn" onclick="initializeFirestorePlantLatestHours()">Initialize Plant Latest Hours</button>
             <button type="button" class="secondary small-btn" onclick="backfillFirestoreEntriesToGoogleSheets()">Backfill Firestore Entries to Google Sheets</button>
@@ -568,7 +572,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 
   <script>
-    const APP_BUILD = "site-production-v3.3.14-stockpile-lunch-responsibility";
+    const APP_BUILD = "site-production-v3.3.15-employee-site-allocation";
     const STORAGE_KEY = "production_app_entries_v9";
     const MACHINE_MASTER_KEY = "production_app_machine_master_v9";
     const SITE_MASTER_KEY = "production_app_site_master_v9";
@@ -1972,9 +1976,14 @@
       dl.innerHTML = uniqueSorted(values).map(v => `<option value="${escapeHtml(v)}"></option>`).join("");
     }
 
-    function buildStaffNumberOptions(selectedValue = "") {
+    function buildStaffNumberOptions(selectedValue = "", historicalName = "") {
       const selected = String(selectedValue || "").trim();
-      const staffMaster = getStaffMaster();
+      const site = document.getElementById("siteName")?.value || "";
+      const staffMaster = getEligibleStaffForSite(site).map(normalizeStaffMember);
+      if (selected && !staffMaster.some(member => member.employeeNumber === selected) && currentEditingEntryId) {
+        const historical = firebaseEmployees.find(member => String(member.employeeNumber || "").trim() === selected);
+        staffMaster.push({ employeeNumber: selected, name: historicalName || historical?.name || "" });
+      }
       const options = ['<option value="">Select employee</option>'];
       staffMaster.forEach(member => {
         const value = escapeHtml(member.employeeNumber || "");
@@ -2089,6 +2098,7 @@
 
       populateSiteSelector();
       renderAdminUserSitesPicker();
+      renderAdminEmployeeSitesPicker(getSelectedAdminEmployeeSites());
       if (isCurrentFirebaseAdmin()) renderAdminSiteClientsList();
       return firebaseSiteClients;
     }
@@ -2124,6 +2134,7 @@
       const site = document.getElementById("siteName")?.value || "";
       const clientInput = document.getElementById("client");
       if (clientInput) clientInput.value = getClientForSite(site);
+      refreshStaffOptionsForSite();
     }
 
     function getSelectedAdminUserSites() {
@@ -2370,11 +2381,12 @@
 
     function syncFirestoreMastersToLocalLists() {
       const activeEmployees = firebaseEmployees
-        .filter(item => item.active !== false)
+        .filter(item => item.active !== false && item.deleted !== true)
         .map(item => ({
           employeeNumber: String(item.employeeNumber || "").trim(),
           name: String(item.name || "").trim(),
-          designation: String(item.designation || "").trim()
+          designation: String(item.designation || "").trim(),
+          assignedSites: Array.isArray(item.assignedSites) ? item.assignedSites : []
         }))
         .filter(item => item.employeeNumber || item.name);
 
@@ -2406,6 +2418,7 @@
         firebaseEmployees = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
           .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
         syncFirestoreMastersToLocalLists();
+        refreshStaffOptionsForSite();
         if (isCurrentFirebaseAdmin()) renderAdminEmployeesList();
       }, err => console.warn("Employees realtime listener:", err));
 
@@ -2450,28 +2463,76 @@
       }, 0);
     }
 
+    function getSelectedAdminEmployeeSites() {
+      return Array.from(document.querySelectorAll('#adminEmployeeSitesPicker input[type="checkbox"]:checked'))
+        .map(input => normalizeSiteText(input.value)).filter(Boolean);
+    }
+
+    function renderAdminEmployeeSitesPicker(selectedSites = []) {
+      const container = document.getElementById("adminEmployeeSitesPicker");
+      if (!container) return;
+      const selected = new Set(selectedSites.map(site => normalizeSiteText(site).toLowerCase()));
+      const sites = getConfiguredSiteNames();
+      container.innerHTML = sites.length
+        ? sites.map(site => {
+            const checked = selected.has(normalizeSiteText(site).toLowerCase()) ? " checked" : "";
+            return `<label class="admin-site-choice"><input type="checkbox" value="${escapeHtml(site)}"${checked}>${escapeHtml(site)}</label>`;
+          }).join("")
+        : '<span class="muted">Add Sites & Clients first.</span>';
+    }
+
+    function getEligibleStaffForSite(siteName) {
+      const site = normalizeSiteText(siteName).toLowerCase();
+      if (!site) return [];
+      return firebaseEmployees.filter(member =>
+        member.active !== false &&
+        member.deleted !== true &&
+        Array.isArray(member.assignedSites) &&
+        member.assignedSites.some(assigned => normalizeSiteText(assigned).toLowerCase() === site)
+      );
+    }
+
+    function refreshStaffOptionsForSite() {
+      document.querySelectorAll('#staffList .staff-item').forEach(row => {
+        const select = row.querySelector('.staff-number');
+        if (!select) return;
+        const previous = select.value;
+        const previousName = row.querySelector('.staff-name')?.value || "";
+        select.innerHTML = buildStaffNumberOptions(previous, previousName);
+        if (Array.from(select.options).some(option => option.value === previous)) {
+          select.value = previous;
+        } else {
+          select.value = "";
+          const nameInput = row.querySelector('.staff-name');
+          if (nameInput) nameInput.value = "";
+        }
+      });
+    }
+
     async function saveEmployeeFromAdmin() {
       if (!isCurrentFirebaseAdmin()) return setAdminMasterStatus("adminEmployeeStatus", "Admin access required.", "warn");
       const employeeNumber = String(document.getElementById("adminEmployeeNumber")?.value || "").trim();
       const name = String(document.getElementById("adminEmployeeName")?.value || "").trim();
       const designation = String(document.getElementById("adminEmployeeDesignation")?.value || "").trim();
       const active = document.getElementById("adminEmployeeActive")?.value !== "false";
+      const assignedSites = getSelectedAdminEmployeeSites();
       if (!employeeNumber) return setAdminMasterStatus("adminEmployeeStatus", "Enter Employee Number.", "warn");
       if (!name) return setAdminMasterStatus("adminEmployeeStatus", "Enter Employee Name.", "warn");
 
       const record = {
-        employeeNumber, name, designation, active,
+        employeeNumber, name, designation, active, assignedSites, deleted: false,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
         updatedBy: firebaseAuth.currentUser?.phoneNumber || ""
       };
       setAdminMasterStatus("adminEmployeeStatus", "Saving...");
       try {
         await firebaseDb.collection("employees").doc(employeeDocId(employeeNumber, name)).set(record, { merge: true });
-        mirrorMasterRecordInBackground("employee", { employeeNumber, name, designation, active });
+        mirrorMasterRecordInBackground("employee", { employeeNumber, name, designation, active, assignedSites, deleted: false });
         document.getElementById("adminEmployeeNumber").value = "";
         document.getElementById("adminEmployeeName").value = "";
         document.getElementById("adminEmployeeDesignation").value = "";
         document.getElementById("adminEmployeeActive").value = "true";
+        renderAdminEmployeeSitesPicker([]);
         setAdminMasterStatus("adminEmployeeStatus", "Employee saved to Firebase. Google Sheets update started in background.", "good");
       } catch (err) {
         setAdminMasterStatus("adminEmployeeStatus", err.message || "Could not save employee.", "warn");
@@ -2485,27 +2546,59 @@
       document.getElementById("adminEmployeeName").value = item.name || "";
       document.getElementById("adminEmployeeDesignation").value = item.designation || "";
       document.getElementById("adminEmployeeActive").value = item.active === false ? "false" : "true";
+      renderAdminEmployeeSitesPicker(item.assignedSites || []);
       document.getElementById("adminEmployeeNumber").scrollIntoView({ behavior: "smooth", block: "center" });
     }
 
     function renderAdminEmployeesList() {
       const el = document.getElementById("adminEmployeesList");
       if (!el) return;
-      if (!firebaseEmployees.length) {
+      const visibleEmployees = firebaseEmployees.filter(item => item.deleted !== true);
+      if (!visibleEmployees.length) {
         el.innerHTML = '<div class="empty">No employees in Firestore yet.</div>';
         return;
       }
-      el.innerHTML = firebaseEmployees.map(item => `
+      el.innerHTML = visibleEmployees.map(item => `
         <div class="site-client-row">
           <div class="row">
             <div>
               <strong>${escapeHtml(item.employeeNumber || "")} · ${escapeHtml(item.name || "")}</strong>
-              <div class="muted">${escapeHtml(item.designation || "")} · ${item.active === false ? "Inactive" : "Active"}</div>
+              <div class="muted">${escapeHtml(item.designation || "")} · ${item.active === false ? "Inactive" : "Active"} · Sites: ${escapeHtml((item.assignedSites || []).join(", ") || "None")}</div>
             </div>
             <button type="button" class="secondary small-btn" onclick="editEmployeeFromAdmin('${escapeHtml(item.id)}')">Edit</button>
+            <button type="button" class="danger small-btn" onclick="deleteEmployeeFromAdmin('${escapeHtml(item.id)}')">Delete</button>
           </div>
         </div>
       `).join("");
+    }
+
+    async function deleteEmployeeFromAdmin(docId) {
+      if (!isCurrentFirebaseAdmin()) return setAdminMasterStatus("adminEmployeeStatus", "Admin access required.", "warn");
+      const item = firebaseEmployees.find(row => row.id === docId);
+      if (!item || item.deleted === true) return;
+      if (!confirm(`Delete ${item.employeeNumber} - ${item.name} from the employee register?\n\nHistorical entries will remain unchanged.`)) return;
+      try {
+        // Retain a Firestore tombstone to prevent accidental reimport.
+        await firebaseDb.collection("employees").doc(docId).set({
+          active: false,
+          deleted: true,
+          assignedSites: [],
+          deletedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedBy: firebaseAuth.currentUser?.phoneNumber || ""
+        }, { merge: true });
+        mirrorMasterRecordInBackground("employee", {
+          employeeNumber: item.employeeNumber || "",
+          name: item.name || "",
+          designation: item.designation || "",
+          active: false,
+          deleted: true,
+          assignedSites: []
+        });
+        setAdminMasterStatus("adminEmployeeStatus", "Employee deleted from active register. Historical entries retained.", "good");
+      } catch (err) {
+        setAdminMasterStatus("adminEmployeeStatus", err.message || "Employee deletion failed.", "warn");
+      }
     }
 
     async function savePlantFromAdmin() {
@@ -2727,113 +2820,6 @@
       }
     }
 
-    async function importAllEmployeePlantMastersToFirestore() {
-      if (!isCurrentFirebaseAdmin()) return setAdminMasterStatus("adminMasterImportStatus", "Admin access required.", "warn");
-      const url = getGoogleSyncUrl();
-      if (!url) return setAdminMasterStatus("adminMasterImportStatus", "Apps Script URL is not configured.", "warn");
-      if (!navigator.onLine) return setAdminMasterStatus("adminMasterImportStatus", "Internet connection required.", "warn");
-      if (!confirm("Import ALL Staff Master and Machine Master data from Google Sheets into Firestore?\n\nExisting Firestore employees and plants will not be overwritten.")) return;
-
-      setAdminMasterStatus("adminMasterImportStatus", "Downloading full employee and plant masters from Google Sheets...");
-      try {
-        const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}action=mastermigration&t=${Date.now()}`, {
-          method: "GET", cache: "no-store"
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok || result.ok === false) throw new Error(result.error || result.message || ("HTTP " + response.status));
-
-        const employees = Array.isArray(result.employees) ? result.employees : [];
-        const plants = Array.isArray(result.plants) ? result.plants : [];
-        const migrationLatestHours = result.machineLatestHours || {};
-
-        const existingEmployeeIds = new Set(firebaseEmployees.map(item => item.id));
-        const existingPlantIds = new Set(firebasePlants.map(item => item.id));
-
-        let employeesImported = 0, employeesSkipped = 0, plantsImported = 0, plantsSkipped = 0;
-        let batch = firebaseDb.batch();
-        let batchCount = 0;
-
-        async function flushBatch() {
-          if (!batchCount) return;
-          await batch.commit();
-          batch = firebaseDb.batch();
-          batchCount = 0;
-        }
-
-        for (const item of employees) {
-          const employeeNumber = String(item.employeeNumber || "").trim();
-          const name = String(item.name || "").trim();
-          const id = employeeDocId(employeeNumber, name);
-          if (!id || existingEmployeeIds.has(id)) { employeesSkipped++; continue; }
-          batch.set(firebaseDb.collection("employees").doc(id), {
-            ...item,
-            employeeNumber,
-            name,
-            active: item.active !== false,
-            importedFromGoogleSheets: true,
-            importedAt: firebase.firestore.FieldValue.serverTimestamp()
-          }, { merge: false });
-          batchCount++;
-          employeesImported++;
-          if (batchCount >= 400) await flushBatch();
-        }
-
-        for (const item of plants) {
-          const plantNumber = String(item.plantNumber || "").trim();
-          const name = String(item.name || item.machineName || "").trim();
-          const id = plantDocId(plantNumber, name);
-          if (!id || existingPlantIds.has(id)) { plantsSkipped++; continue; }
-          const combinedHoursKey = machineKey(name, plantNumber);
-          const plantHoursKey = plantNumber.toLowerCase();
-          const importedLatestHours = Object.prototype.hasOwnProperty.call(migrationLatestHours, combinedHoursKey)
-            ? Number(migrationLatestHours[combinedHoursKey])
-            : (Object.prototype.hasOwnProperty.call(migrationLatestHours, plantHoursKey) ? Number(migrationLatestHours[plantHoursKey]) : null);
-          batch.set(firebaseDb.collection("plants").doc(id), {
-            ...item,
-            plantNumber,
-            name,
-            active: item.active !== false,
-            ...(importedLatestHours !== null && !Number.isNaN(importedLatestHours) ? {
-              latestHours: importedLatestHours,
-              latestHoursSource: "Existing Google Sheets / Service Reports"
-            } : {}),
-            importedFromGoogleSheets: true,
-            importedAt: firebase.firestore.FieldValue.serverTimestamp()
-          }, { merge: false });
-          batchCount++;
-          plantsImported++;
-          if (batchCount >= 400) await flushBatch();
-        }
-
-        await flushBatch();
-
-        setAdminMasterStatus(
-          "adminMasterImportStatus",
-          `Import complete · Employees: ${employeesImported} imported, ${employeesSkipped} existing/skipped · Plants: ${plantsImported} imported, ${plantsSkipped} existing/skipped.`,
-          "good"
-        );
-      } catch (err) {
-        console.error("Master migration failed:", err);
-        setAdminMasterStatus("adminMasterImportStatus", "Import failed: " + (err.message || String(err)), "warn");
-      }
-    }
-
-    const firebaseConfig = {
-      apiKey: "AIzaSyBSjXibnWsPfKicOrRisN_-n4TzKBhH3VU",
-      authDomain: "site-production-3b20b.firebaseapp.com",
-      projectId: "site-production-3b20b",
-      storageBucket: "site-production-3b20b.firebasestorage.app",
-      messagingSenderId: "448364112489",
-      appId: "1:448364112489:web:71a129e7145e0ac50c10f8",
-      measurementId: "G-PDP7QLJHJ2"
-    };
-
-    let firebaseAuth = null;
-    let firebaseDb = null;
-    let firebaseConfirmationResult = null;
-    let firebaseRecaptchaVerifier = null;
-    let firebaseCurrentAllowedUser = null;
-    let firebaseAuthInitialized = false;
 
     function normalizeSouthAfricanPhone(value) {
       let raw = String(value || "").trim().replace(/[()\s-]/g, "");
@@ -3754,7 +3740,7 @@
 
     function openStaffMasterPicker(input) { return; }
 
-    
+
 function attachMachineRowLogic(wrapper) {
       const machineInput = wrapper.querySelector(".machine-label");
       const plantInput = wrapper.querySelector(".machine-plant");
@@ -3838,7 +3824,7 @@ function attachMachineRowLogic(wrapper) {
       hoursInput.value = hours === null ? '' : hours.toFixed(2);
     }
 
-    
+
 function attachStaffRowLogic(wrapper) {
       const numberInput = wrapper.querySelector('.staff-number');
       const nameInput = wrapper.querySelector('.staff-name');
@@ -3848,11 +3834,14 @@ function attachStaffRowLogic(wrapper) {
 
       function syncStaffFields() {
         const typedNumber = String(numberInput.value || '').trim();
-        const match = findStaffByEmployeeNumber(typedNumber);
+        const site = document.getElementById("siteName")?.value || "";
+        const match = getEligibleStaffForSite(site).find(member =>
+          String(member.employeeNumber || "").trim() === typedNumber
+        );
         if (match) {
           numberInput.value = match.employeeNumber || typedNumber;
           nameInput.value = match.name || '';
-        } else {
+        } else if (!(currentEditingEntryId && typedNumber && nameInput.value)) {
           nameInput.value = '';
         }
       }
@@ -3875,7 +3864,7 @@ function attachStaffRowLogic(wrapper) {
           <div>
             <label>Employee Number</label>
             <select class="staff-number">
-              ${buildStaffNumberOptions(employeeNumber)}
+              ${buildStaffNumberOptions(employeeNumber, name)}
             </select>
           </div>
           <div>
@@ -3919,7 +3908,21 @@ function attachStaffRowLogic(wrapper) {
       for (const member of staff) {
         if (!member.employeeNumber) return 'Please select an employee from the master list for each staff row.';
         if (!member.name) return `Please select a valid employee from the master list for ${member.employeeNumber}.`;
-        if (isStaffLockedToMaster() && !findStaffByEmployeeNumber(member.employeeNumber)) return `Employee ${member.employeeNumber} is not in the downloaded master list.`;
+        const eligibleForSite = getEligibleStaffForSite(
+          document.getElementById("siteName")?.value || ""
+        ).some(item => String(item.employeeNumber || "").trim() === member.employeeNumber);
+
+        const originalEntry = currentEditingEntryId
+          ? findLocalEntryById(currentEditingEntryId)
+          : null;
+
+        const existingHistoricalEmployee = Array.isArray(originalEntry?.staff) &&
+          originalEntry.staff.some(item =>
+            String(item.employeeNumber || "").trim() === member.employeeNumber
+          );
+
+        if (!eligibleForSite && !existingHistoricalEmployee)
+          return `Employee ${member.employeeNumber} is not active or allocated to this site.`;
         if (!member.startTime) return `Please enter start time for ${member.name}.`;
         if (!member.endTime) return `Please enter end time for ${member.name}.`;
         const hours = calculateShiftHours(member.startTime, member.endTime);
@@ -4180,7 +4183,7 @@ function attachStaffRowLogic(wrapper) {
 
     function replaceDownloadedMasters(masterPayload = {}) {
       const normalized = getNormalizedMastersPayload(masterPayload);
-      saveList(STAFF_MASTER_KEY, dedupeStaffMaster(normalized.staffMaster));
+      // Firestore is the employee master. Google Sheets cannot overwrite it.
       saveList(MACHINE_MASTER_KEY, dedupeMachineMaster(normalized.machineMaster));
       saveList(TIME_MANAGEMENT_MASTER_KEY, (normalized.timeManagementMaster || []).map(normalizeTimeManagementMasterItem).filter(Boolean));
       saveMachineLatestHoursMap(normalized.machineLatestHours || {});
@@ -6199,7 +6202,7 @@ Type CLEAR to clear ${entries.length} entr${entries.length === 1 ? "y" : "ies"} 
       };
     }
 
-    
+
 
 function getPrintStyles() {
       return `
@@ -6355,7 +6358,7 @@ function getPrintStyles() {
           .site-report-page:last-child { page-break-after: auto; }
           .continuation-page .print-letterhead { display:none; }
           .report-box, .detail-item, .signature-box, table.report-table, table.report-table thead, table.report-table tbody, table.report-table tr { break-inside: avoid; page-break-inside: avoid; }
-      
+
     .site-folder { border:1px solid #d1d5db; border-radius:14px; margin-top:12px; background:#f9fafb; overflow:hidden; }
     .site-folder summary { list-style:none; cursor:pointer; padding:14px 16px; font-weight:700; display:flex; justify-content:space-between; align-items:center; gap:12px; background:#eef2ff; }
     .site-folder summary::-webkit-details-marker { display:none; }
@@ -6450,7 +6453,7 @@ function getPrintStyles() {
       printSectionAsPdf("screen-summary", "SITE PRODUCTION DAILY SUMMARY", "summaryExportStatus");
     }
 
-    
+
     function openCustomPrintWindow(reportHtml, statusId, queueMeta = {}) {
       const status = statusId ? document.getElementById(statusId) : null;
       if (queueMeta && queueMeta.queue !== false) {
@@ -6689,7 +6692,7 @@ function getPrintStyles() {
       `;
     }
 
-    
+
 
 function getSiteReportPageCount(entry) {
       const staffCount = Array.isArray(entry && entry.staff) ? entry.staff.length : 0;
@@ -6947,7 +6950,7 @@ function exportEntriesToPdf() {
     } else {
       bootstrapApp();
     }
-  
+
 function showSaveError(msg){
   var el=document.getElementById('saveStatus');
   if(el){ el.className='status warn'; el.textContent=msg; }
